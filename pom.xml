@@ -397,5 +397,21 @@
                 <module>plugin/writer/txtfilewriter</module>
             </modules>
         </profile>
+
+        <profile>
+            <id>influxdb</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <!-- reader -->
+                <module>plugin/reader/influxdbreader</module>
+                <module>plugin/reader/streamreader</module>
+
+                <!-- writer -->
+                <module>plugin/writer/influxdbwriter</module>
+                <module>plugin/writer/streamwriter</module>
+            </modules>
+        </profile>
     </profiles>
 </project>

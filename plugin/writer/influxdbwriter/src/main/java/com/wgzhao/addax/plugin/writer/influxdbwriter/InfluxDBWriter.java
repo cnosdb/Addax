@@ -23,6 +23,7 @@ import com.wgzhao.addax.common.exception.AddaxException;
 import com.wgzhao.addax.common.plugin.RecordReceiver;
 import com.wgzhao.addax.common.spi.Writer;
 import com.wgzhao.addax.common.util.Configuration;
+import org.apache.commons.lang3.StringUtils;
 import org.influxdb.InfluxDB;
 import org.influxdb.InfluxDBFactory;
 import org.influxdb.dto.Query;
@@ -59,10 +60,17 @@ public class InfluxDBWriter
             this.username = originalConfig.getString(InfluxDBKey.USERNAME);
             this.password = originalConfig.getString(InfluxDBKey.PASSWORD);
             List<String> columns = originalConfig.getList(InfluxDBKey.COLUMN, String.class);
-            if (columns == null || columns.isEmpty()) {
+            boolean receiveTableInfo = originalConfig.getBool(InfluxDBKey.RECEIVE_TABLE_INFO, false);
+            if (!receiveTableInfo && (columns == null || columns.isEmpty())) {
                 throw AddaxException.asAddaxException(
                         REQUIRED_VALUE,
-                        "The parameter [" + InfluxDBKey.COLUMN + "] is not set.");
+                        "The parameter [" + InfluxDBKey.COLUMN + "] is not set when [" + InfluxDBKey.RECEIVE_TABLE_INFO +"] is set to true.");
+            }
+            String precision = originalConfig.getString(InfluxDBKey.PRECISION);
+            if (!StringUtils.equalsAny(precision, "ns", "u", "ms", "s", "m", "h")) {
+                throw AddaxException.asAddaxException(
+                        ILLEGAL_VALUE,
+                        "The parameter [" + InfluxDBKey.PRECISION + "] is not valid, expected: ns, u, ms, s, m, h.");
             }
         }
 
@@ -71,7 +79,13 @@ public class InfluxDBWriter
         {
             List<String> preSqls = originalConfig.getList(InfluxDBKey.PRE_SQL, String.class);
             if (!preSqls.isEmpty()) {
-                try (InfluxDB influxDB = InfluxDBFactory.connect(this.endpoint, this.username, this.password)) {
+                InfluxDB influxDB = null;
+                try {
+                    if (this.username == null) {
+                        influxDB = InfluxDBFactory.connect(this.endpoint);
+                    } else {
+                        influxDB = InfluxDBFactory.connect(this.endpoint, this.username, this.password);
+                    }
                     influxDB.setDatabase(database);
                     for (String sql : preSqls) {
                         influxDB.query(new Query(sql));
@@ -81,6 +95,11 @@ public class InfluxDBWriter
                     throw AddaxException.asAddaxException(
                             CONNECT_ERROR, e
                     );
+                }
+                finally {
+                    if (influxDB != null) {
+                        influxDB.close();
+                    }
                 }
             }
         }
@@ -100,7 +119,13 @@ public class InfluxDBWriter
         {
             List<String> postSqls = originalConfig.getList(InfluxDBKey.POST_SQL, String.class);
             if (!postSqls.isEmpty()) {
-                try (InfluxDB influxDB = InfluxDBFactory.connect(endpoint, username, password)) {
+                InfluxDB influxDB = null;
+                try {
+                    if (this.username == null) {
+                        influxDB = InfluxDBFactory.connect(this.endpoint);
+                    } else {
+                        influxDB = InfluxDBFactory.connect(this.endpoint, this.username, this.password);
+                    }
                     influxDB.setDatabase(database);
                     for (String sql : postSqls) {
                         influxDB.query(new Query(sql));
@@ -110,6 +135,11 @@ public class InfluxDBWriter
                     throw AddaxException.asAddaxException(
                             ILLEGAL_VALUE, e
                     );
+                }
+                finally {
+                    if (influxDB != null) {
+                        influxDB.close();
+                    }
                 }
             }
         }

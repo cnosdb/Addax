@@ -27,4 +27,14 @@ public final class InfluxDBKey
     public static final String ENDPOINT = "endpoint";
     public static final String CONNECT_TIMEOUT_SECONDS = "connTimeout";
     public static final String SOCKET_TIMEOUT_SECONDS = "socketTimeout";
+
+    /**
+     *  Convert result timestamps
+     */
+    public static final String EPOCH = "epoch";
+
+    /**
+     * Fetch table info from InfluxDB and send to writer.
+     */
+    public static final String SEND_TABLE_INFO = "sendTableInfo";
 }

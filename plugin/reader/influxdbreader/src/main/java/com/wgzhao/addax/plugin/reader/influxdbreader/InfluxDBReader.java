@@ -28,6 +28,7 @@ import org.apache.commons.lang3.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.wgzhao.addax.common.spi.ErrorCode.ILLEGAL_VALUE;
 import static com.wgzhao.addax.common.spi.ErrorCode.REQUIRED_VALUE;
 
 public class InfluxDBReader
@@ -65,6 +66,20 @@ public class InfluxDBReader
                 throw AddaxException.asAddaxException(
                         REQUIRED_VALUE,
                         "The parameter [" + InfluxDBKey.COLUMN + "] is not set.");
+            }
+            String epoch = originalConfig.getString(InfluxDBKey.EPOCH);
+            if (!StringUtils.equalsAny(epoch, "ns", "u", "ms", "s", "m", "h")) {
+                throw AddaxException.asAddaxException(
+                        ILLEGAL_VALUE,
+                        "The parameter [" + InfluxDBKey.EPOCH + "] is not valid, expected: ns, u, ms, s, m, h.");
+            }
+            boolean fetchTableInfo = originalConfig.getBool(InfluxDBKey.SEND_TABLE_INFO, false);
+            if (fetchTableInfo) {
+                if (StringUtils.isBlank(table)) {
+                    throw AddaxException.asAddaxException(
+                            REQUIRED_VALUE,
+                            "The parameter [" + InfluxDBKey.TABLE + "] is not set when [" + InfluxDBKey.SEND_TABLE_INFO +"] is set to true.");
+                }
             }
         }
 

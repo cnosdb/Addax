@@ -31,4 +31,9 @@ public final class InfluxDBKey extends Key
     public static final String RP_NAME = "name";
     public static final String RP_DURATION = "duration";
     public static final String RP_REPLICATION = "replication";
+
+    /**
+     * Record meta data contains columns definition (such as 'influxdbreader').
+     */
+    public static final String RECEIVE_TABLE_INFO = "receiveTableInfo";
 }
