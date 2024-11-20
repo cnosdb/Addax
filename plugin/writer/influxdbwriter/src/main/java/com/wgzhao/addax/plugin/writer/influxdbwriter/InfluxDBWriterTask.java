@@ -180,7 +180,7 @@ public class InfluxDBWriterTask
         this.influxDB.enableBatch(this.batchSize, this.writeTimeout, TimeUnit.SECONDS);
         influxDB.setDatabase(database);
         Pong pong = influxDB.ping();
-        LOG.info("ping influxdb: {} with username: {}, pong:{}", endpoint, username, pong.toString());
+        LOG.info("ping influxdb: '{}' with username: '{}', pong: '{}'", endpoint, username, pong.toString());
         if (this.retentionPolicy != null) {
             //create custom retention policy
             String rpName = this.retentionPolicy.getString(InfluxDBKey.RP_NAME, "rp");

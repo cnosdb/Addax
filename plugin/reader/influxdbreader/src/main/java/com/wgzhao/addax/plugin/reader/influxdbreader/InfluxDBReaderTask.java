@@ -21,6 +21,7 @@ package com.wgzhao.addax.plugin.reader.influxdbreader;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.stream.JSONStreamReader;
 import com.wgzhao.addax.common.element.Record;
 import com.wgzhao.addax.common.element.StringColumn;
 import com.wgzhao.addax.common.exception.AddaxException;
@@ -34,11 +35,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URLEncoder;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -51,6 +54,8 @@ public class InfluxDBReaderTask
 
     private static final int CONNECT_TIMEOUT_SECONDS_DEFAULT = 15;
     private static final int SOCKET_TIMEOUT_SECONDS_DEFAULT = 20;
+    private static final boolean CHUNKED_DEFAULT = false;
+    private static final int CHUNK_SIZE_DEFAULT = 10000;
     private static final boolean SEND_TABLE_INFO_DEFAULT = false;
 
     private String querySql;
@@ -62,6 +67,8 @@ public class InfluxDBReaderTask
     private final int connTimeout;
 
     private final String epoch;
+    private final boolean chunked;
+    private final int chunkSize;
     private final boolean sendTableInfo;
     private final String table;
     private final Map<String, String> tableSchema;
@@ -83,6 +90,8 @@ public class InfluxDBReaderTask
         this.connTimeout = configuration.getInt(InfluxDBKey.CONNECT_TIMEOUT_SECONDS, CONNECT_TIMEOUT_SECONDS_DEFAULT);
 
         this.epoch = configuration.getString(InfluxDBKey.EPOCH);
+        this.chunked = configuration.getBool(InfluxDBKey.CHUNKED, CHUNKED_DEFAULT);
+        this.chunkSize = configuration.getInt(InfluxDBKey.CHUNK_SIZE, CHUNK_SIZE_DEFAULT);
         this.sendTableInfo = configuration.getBool(InfluxDBKey.SEND_TABLE_INFO, SEND_TABLE_INFO_DEFAULT);
         this.table = conn.getString(InfluxDBKey.TABLE);
         if (this.sendTableInfo && StringUtils.isNotBlank(this.table)) {
@@ -107,66 +116,65 @@ public class InfluxDBReaderTask
         if (querySql.contains("#lastMinute#")) {
             this.querySql = querySql.replace("#lastMinute#", getLastMinute());
         }
-        String result = this.executeQuery(this.querySql);
-        try {
-            JSONObject jsonObject = JSONObject.parseObject(result);
-            JSONArray results = (JSONArray) jsonObject.get("results");
-            JSONObject resultsMap = (JSONObject) results.get(0);
-            if (resultsMap.containsKey("series")) {
-                JSONArray series = (JSONArray) resultsMap.get("series");
-                JSONObject seriesMap = (JSONObject) series.get(0);
-                List<String> columnNames = null;
-                if (this.sendTableInfo) {
-                    if (seriesMap.containsKey("columns")) {
-                        JSONArray columns = (JSONArray) seriesMap.get("columns");
-                        columnNames = new ArrayList<>(columns.size());
-                        for (Object col : columns) {
-                            columnNames.add(col.toString());
-                        }
-                    } else {
-                        throw AddaxException.asAddaxException(
-                                ILLEGAL_VALUE, "JSON path results[].series[].columns[] not exists！", null);
-                    }
-                }
-                if (seriesMap.containsKey("values")) {
-                    JSONArray values = (JSONArray) seriesMap.get("values");
-                    for (Object row : values) {
-                        JSONArray rowArray = (JSONArray) row;
-                        Record record = recordSender.createRecord();
-                        for (Object s : rowArray) {
-                            if (null != s) {
-                                record.addColumn(new StringColumn(s.toString()));
+        this.executeQueryAndConsumeEachResult(this.querySql, (jsonObject -> {
+            try {
+                JSONArray results = (JSONArray) jsonObject.get("results");
+                JSONObject resultsMap = (JSONObject) results.get(0);
+                if (resultsMap.containsKey("series")) {
+                    JSONArray series = (JSONArray) resultsMap.get("series");
+                    JSONObject seriesMap = (JSONObject) series.get(0);
+                    List<String> columnNames = null;
+                    if (this.sendTableInfo) {
+                        if (seriesMap.containsKey("columns")) {
+                            JSONArray columns = (JSONArray) seriesMap.get("columns");
+                            columnNames = new ArrayList<>(columns.size());
+                            for (Object col : columns) {
+                                columnNames.add(col.toString());
                             }
-                            else {
-                                record.addColumn(new StringColumn());
-                            }
+                        } else {
+                            throw AddaxException.asAddaxException(
+                                    ILLEGAL_VALUE, "JSON path results[].series[].columns[] not exists！", null);
                         }
-                        if (this.sendTableInfo) {
-                            Map<String, String> tableInfo = this.buildTableInfo(columnNames);
-                            record.setMeta(tableInfo);
-                        }
-                        recordSender.sendToWriter(record);
                     }
+                    if (seriesMap.containsKey("values")) {
+                        JSONArray values = (JSONArray) seriesMap.get("values");
+                        for (Object row : values) {
+                            JSONArray rowArray = (JSONArray) row;
+                            Record record = recordSender.createRecord();
+                            for (Object s : rowArray) {
+                                if (null != s) {
+                                    record.addColumn(new StringColumn(s.toString()));
+                                } else {
+                                    record.addColumn(new StringColumn());
+                                }
+                            }
+                            if (this.sendTableInfo) {
+                                Map<String, String> tableInfo = this.buildTableInfo(columnNames);
+                                record.setMeta(tableInfo);
+                            }
+                            recordSender.sendToWriter(record);
+                        }
+                    }
+                } else if (resultsMap.containsKey("error")) {
+                    throw AddaxException.asAddaxException(
+                            ILLEGAL_VALUE, "Error occurred in data sets！", null);
                 }
-            }
-            else if (resultsMap.containsKey("error")) {
+            } catch (Exception e) {
                 throw AddaxException.asAddaxException(
-                        ILLEGAL_VALUE, "Error occurred in data sets！", null);
+                        ILLEGAL_VALUE, "Failed to send data", e);
             }
-        }
-        catch (Exception e) {
-            throw AddaxException.asAddaxException(
-                    ILLEGAL_VALUE, "Failed to send data", e);
-        }
+        }));
     }
 
-    private String combineUrl(String sql)
-    {
+    private String combineUrl(String sql, boolean allowChunked) {
         String enc = "utf-8";
         try {
             String url = endpoint + "/query?&db=" + URLEncoder.encode(database, enc);
             if (StringUtils.isNotBlank(this.epoch)) {
                 url += "&epoch=" + URLEncoder.encode(this.epoch, enc);
+            }
+            if (allowChunked && this.chunked) {
+                url += "&chunked=true&chunk_size=" + this.chunkSize;
             }
             if (!"".equals(username)) {
                 url += "&u=" + URLEncoder.encode(username, enc);
@@ -191,10 +199,10 @@ public class InfluxDBReaderTask
     }
 
     private String executeQuery(String url) {
-        LOG.info("connect influxdb: {} with username: {}", endpoint, username);
+        LOG.info("connect influxdb: '{}' with username: '{}'", endpoint, username);
         String result;
         try {
-            result = Request.get(combineUrl(url))
+            result = Request.get(combineUrl(url, false))
                     .connectTimeout(Timeout.ofSeconds(connTimeout))
                     .execute()
                     .returnContent().asString();
@@ -212,7 +220,51 @@ public class InfluxDBReaderTask
         return result;
     }
 
-    private void parseResult(String result, Consumer<JSONArray> consumer) {
+    private void executeQueryAndConsumeEachResult(String url, Consumer<JSONObject> consumer) {
+        LOG.info("connect influxdb: '{}' with username: '{}', chunked: {}, chunk_size: {}", endpoint, username, chunked, chunkSize);
+        if (this.chunked) {
+            try (InputStream responseStream = Request.get(combineUrl(url, true))
+                    .connectTimeout(Timeout.ofSeconds(connTimeout))
+                    .execute()
+                    .returnContent().asStream()) {
+                // noinspection unchecked
+                Iterator<JSONObject> iterator = JSONStreamReader.of(responseStream).stream(JSONObject.class).iterator();
+                while (iterator.hasNext()) {
+                    JSONObject jsonObject = iterator.next();
+                    consumer.accept(jsonObject);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        } else {
+            String result;
+            try {
+                result = Request.get(combineUrl(url, false))
+                        .connectTimeout(Timeout.ofSeconds(connTimeout))
+                        .execute()
+                        .returnContent().asString();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            if (StringUtils.isBlank(result)) {
+                throw AddaxException.asAddaxException(
+                        ILLEGAL_VALUE, "Get nothing!", null);
+            }
+            if (StringUtils.isBlank(result)) {
+                throw AddaxException.asAddaxException(
+                        ILLEGAL_VALUE, "Get nothing!", null);
+            }
+            try {
+                JSONObject jsonObject = JSONObject.parseObject(result);
+                consumer.accept(jsonObject);
+            } catch (Exception e) {
+                throw AddaxException.asAddaxException(
+                        ILLEGAL_VALUE, "Failed to send data", e);
+            }
+        }
+    }
+
+    private void parseResultAndConsumeEachRow(String result, Consumer<JSONArray> consumer) {
         try {
             JSONObject jsonObject = JSONObject.parseObject(result);
             JSONArray results = (JSONArray) jsonObject.get("results");
@@ -249,13 +301,14 @@ public class InfluxDBReaderTask
      *     <li>String -> s</li>
      *     <li>Boolean -> b</li>
      * </ul>
+     *
      * @return The mapping of {column_name} to {column_type}.
      */
     private HashMap<String, String> queryTableInfo() {
         HashMap<String, String> meta = new HashMap<>();
 
         String result = this.executeQuery("SHOW TAG KEYS FROM " + this.table);
-        parseResult(result, (row) -> {
+        parseResultAndConsumeEachRow(result, (row) -> {
             Object tagKey = row.get(0);
             if (tagKey != null) {
                 meta.put(tagKey.toString(), "T");
@@ -266,7 +319,7 @@ public class InfluxDBReaderTask
         });
 
         result = this.executeQuery("SHOW FIELD KEYS FROM " + this.table);
-        parseResult(result, (row) -> {
+        parseResultAndConsumeEachRow(result, (row) -> {
             Object fieldKey = row.get(0);
             if (fieldKey != null) {
                 String key = fieldKey.toString();
@@ -304,6 +357,7 @@ public class InfluxDBReaderTask
 
     /**
      * Build table information for a list of columns.
+     *
      * @param columnNames the column names of the series.
      * @return The mapping of {column_name} to {column_index}_{column_type}.
      */

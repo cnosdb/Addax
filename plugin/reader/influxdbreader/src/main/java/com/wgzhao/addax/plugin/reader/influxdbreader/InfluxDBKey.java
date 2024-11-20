@@ -29,12 +29,23 @@ public final class InfluxDBKey
     public static final String SOCKET_TIMEOUT_SECONDS = "socketTimeout";
 
     /**
-     *  Convert result timestamps
+     *  Request parameter 'epoch' to convert result timestamps.
      */
     public static final String EPOCH = "epoch";
 
     /**
-     * Fetch table info from InfluxDB and send to writer.
+     * Request parameter 'chunked'.
+     */
+    public static final String CHUNKED = "chunked";
+
+    /**
+     * Request parameter 'chunk_size'.
+     */
+    public static final String CHUNK_SIZE = "chunkSize";
+
+    /**
+     * Fetch table info from InfluxDB by 'SHOW TAG KEYS FROM <u>table</u>' and 'SHOW FIELD KEYS FROM <u>table</u>'
+     * and send to writer.
      */
     public static final String SEND_TABLE_INFO = "sendTableInfo";
 }
